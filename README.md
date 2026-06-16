@@ -21,7 +21,7 @@ flowchart TB
 
     avdaemon["avdaemon<br/>fanotify +<br/>scan + IPC<br/>root, systemd"]
 
-    avclient["avclient<br/>Slint GUI<br/><br/>(user)"]
+    avclient["avclient<br/>Slint GUI<br/>(user)"]
 
     avcore --> avipc
     avcore --> avscan
