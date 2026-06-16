@@ -1,0 +1,1757 @@
+import { ListView } from "std-widgets.slint";
+
+// ============================================================================
+//  Front-end for the Linux antivirus daemon.
+//  Clean enterprise dark theme (Monitoring / Scan results / Quarantine).
+// ============================================================================
+
+/// One entry currently held in the quarantine store.
+export struct QuarantineRow {
+    id: string,
+    path: string,
+    threat: string,
+    date: string,
+    selected: bool,
+}
+
+/// One path excluded from scanning (a file or a directory subtree).
+export struct ExclusionRow {
+    path: string,
+    is-dir: bool,
+    selected: bool,
+}
+
+/// One threat surfaced by a scan, still awaiting a user decision
+/// (quarantine / delete / mark as exclusion).
+export struct DetectionRow {
+    path: string,
+    threat: string,
+    selected: bool,
+}
+
+// ---------------------------------------------------------------------------
+//  Palette (kept in one place for consistency)
+// ---------------------------------------------------------------------------
+global Theme {
+    out property <color> bg: #0f1012;
+    out property <color> sidebar: #0c0d0f;
+    out property <color> card: #16171a;
+    out property <color> card-hover: #1d1f24;
+    out property <color> border: #25262b;
+    out property <color> text: #f3f4f6;
+    out property <color> text-dim: #9b9da6;
+    out property <color> text-mute: #62646c;
+    out property <color> accent: #2fdf9f;
+    out property <color> danger: #ff5b6e;
+}
+
+// ---------------------------------------------------------------------------
+//  Reusable building blocks
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+//  Vector icon set (Lucide-style line icons, drawn as Paths on a 24x24 grid)
+// ---------------------------------------------------------------------------
+
+// A stroked path filling the icon box, with theme-tintable colour.
+component IconStroke inherits Path {
+    in property <length> sw: 2px;
+    width: 100%;
+    height: 100%;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke-width: sw;
+    fill: transparent;
+}
+
+// A filled path on the same grid (for solid glyphs and dots).
+component IconFill inherits Path {
+    width: 100%;
+    height: 100%;
+    viewbox-width: 24;
+    viewbox-height: 24;
+}
+
+// Wrapper so multi-path icons fill the icon box.
+component IconGroup inherits Rectangle {
+    width: 100%;
+    height: 100%;
+}
+
+// A single named icon, tinted and sized by the caller.
+component Icon inherits Rectangle {
+    in property <string> name;
+    in property <color> tint: Theme.text;
+    in property <length> size: 18px;
+    width: size;
+    height: size;
+    property <length> sw: size / 12;
+
+    if name == "dashboard": IconStroke {
+        stroke: root.tint;
+        sw: root.sw;
+        commands: "M3 3 L10 3 L10 12 L3 12 Z M14 3 L21 3 L21 8 L14 8 Z M14 12 L21 12 L21 21 L14 21 Z M3 16 L10 16 L10 21 L3 21 Z";
+    }
+    if name == "list": IconStroke {
+        stroke: root.tint;
+        sw: root.sw;
+        commands: "M4 6 L20 6 M4 12 L20 12 M4 18 L14 18";
+    }
+    if name == "activity": IconStroke {
+        stroke: root.tint;
+        sw: root.sw;
+        commands: "M22 12 L18 12 L15 21 L9 3 L6 12 L2 12";
+    }
+    if name == "folder": IconStroke {
+        stroke: root.tint;
+        sw: root.sw;
+        commands: "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z";
+    }
+    if name == "shield": IconFill {
+        fill: root.tint;
+        commands: "M12 22 C12 22 20 18 20 12 V5 L12 2 L4 5 V12 C4 18 12 22 12 22 Z";
+    }
+    if name == "check": IconStroke {
+        stroke: root.tint;
+        sw: root.sw * 1.3;
+        commands: "M5 12.5 L10 17.5 L20 6.5";
+    }
+    if name == "power": IconGroup {
+        IconStroke {
+            stroke: root.tint;
+            sw: root.sw;
+            commands: "M18.36 6.64 a9 9 0 1 1 -12.73 0";
+        }
+
+        IconStroke {
+            stroke: root.tint;
+            sw: root.sw;
+            commands: "M12 3 L12 12";
+        }
+    }
+    if name == "ban": IconGroup {
+        IconStroke {
+            stroke: root.tint;
+            sw: root.sw;
+            commands: "M12 2 a10 10 0 1 0 0 20 a10 10 0 1 0 0 -20 Z";
+        }
+
+        IconStroke {
+            stroke: root.tint;
+            sw: root.sw;
+            commands: "M5.2 5.2 L18.8 18.8";
+        }
+    }
+    if name == "lock": IconGroup {
+        IconStroke {
+            stroke: root.tint;
+            sw: root.sw;
+            commands: "M5 11 H19 a2 2 0 0 1 2 2 V20 a2 2 0 0 1 -2 2 H5 a2 2 0 0 1 -2 -2 V13 a2 2 0 0 1 2 -2 Z";
+        }
+
+        IconStroke {
+            stroke: root.tint;
+            sw: root.sw;
+            commands: "M7 11 V7 a5 5 0 0 1 10 0 V11";
+        }
+    }
+    if name == "file": IconGroup {
+        IconStroke {
+            stroke: root.tint;
+            sw: root.sw;
+            commands: "M15 2 H6 a2 2 0 0 0 -2 2 V20 a2 2 0 0 0 2 2 H18 a2 2 0 0 0 2 -2 V7 Z";
+        }
+
+        IconStroke {
+            stroke: root.tint;
+            sw: root.sw;
+            commands: "M14 2 V8 H20 M9 13 H16 M9 17 H16";
+        }
+    }
+    if name == "alert": IconGroup {
+        IconStroke {
+            stroke: root.tint;
+            sw: root.sw;
+            commands: "M10.29 3.86 L1.82 18 a2 2 0 0 0 1.71 3 H20.47 a2 2 0 0 0 1.71 -3 L13.71 3.86 a2 2 0 0 0 -3.42 0 Z";
+        }
+
+        IconStroke {
+            stroke: root.tint;
+            sw: root.sw;
+            commands: "M12 9 L12 13";
+        }
+
+        IconFill {
+            fill: root.tint;
+            commands: "M10.8 16 a1.2 1.2 0 1 0 2.4 0 a1.2 1.2 0 1 0 -2.4 0 Z";
+        }
+    }
+    if name == "exclaim": IconGroup {
+        IconStroke {
+            stroke: root.tint;
+            sw: root.sw * 1.3;
+            commands: "M12 5 L12 13";
+        }
+
+        IconFill {
+            fill: root.tint;
+            commands: "M10.5 17 a1.5 1.5 0 1 0 3 0 a1.5 1.5 0 1 0 -3 0 Z";
+        }
+    }
+}
+
+
+// A text input styled for the dark theme, with an overlaid placeholder.
+component NeoInput inherits Rectangle {
+    in property <string> placeholder;
+    in-out property <string> text <=> ti.text;
+    callback accepted(string);
+
+    height: 40px;
+    border-radius: 9px;
+    background: #131418;
+    border-width: 1px;
+    border-color: ti.has-focus ? Theme.accent : #2a2b30;
+    animate border-color { duration: 120ms; }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        ti := TextInput {
+            vertical-alignment: center;
+            color: Theme.text;
+            font-size: 14px;
+            single-line: true;
+            accepted => {
+                root.accepted(self.text);
+            }
+        }
+    }
+
+    if ti.text == "": Text {
+        x: 14px;
+        height: 100%;
+        vertical-alignment: center;
+        text: root.placeholder;
+        color: Theme.text-mute;
+        font-size: 14px;
+    }
+}
+
+// A flat button. `primary` gives an accent fill; otherwise outlined.
+component AppButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <color> accent: Theme.accent;
+    in property <length> font-size: 13px;
+    callback clicked;
+
+    height: 38px;
+    border-radius: 9px;
+    background: primary ? (ta.has-hover ? accent.brighter(0.08) : accent) : (ta.has-hover ? Theme.card-hover : transparent);
+    border-width: primary ? 0px : 1px;
+    border-color: #34363d;
+    animate background { duration: 110ms; }
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Text {
+        text: root.label;
+        color: primary ? #06231a : root.accent;
+        font-size: root.font-size;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    states [
+        pressed when ta.pressed: {
+            background: primary ? accent.darker(0.12) : #2a2c32;
+        }
+    ]
+}
+
+// A small square checkbox for selecting rows in the table views.
+component SelectBox inherits Rectangle {
+    in property <bool> checked;
+    callback toggled(bool);
+
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border-width: 1.5px;
+    border-color: checked ? Theme.accent : #3a3d44;
+    background: checked ? Theme.accent : (ta.has-hover ? #202227 : transparent);
+    animate background, border-color { duration: 100ms; }
+
+    ta := TouchArea {
+        clicked => {
+            root.toggled(!root.checked);
+        }
+    }
+
+    if checked: Icon {
+        name: "check";
+        tint: #06231a;
+        size: 14px;
+    }
+}
+
+// A left-hand navigation entry.
+component NavButton inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    in property <bool> active;
+    callback clicked;
+
+    height: 46px;
+    border-radius: 10px;
+    background: active ? Theme.card-hover : (ta.has-hover ? #15171b : transparent);
+    animate background { duration: 110ms; }
+
+    Rectangle {
+        x: 0px;
+        width: 3px;
+        height: parent.height * 0.5;
+        border-radius: 2px;
+        background: Theme.accent;
+        opacity: active ? 1.0 : 0.0;
+        animate opacity { duration: 130ms; }
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 18px;
+        spacing: 13px;
+        Icon {
+            name: root.icon;
+            tint: active ? Theme.accent : Theme.text-mute;
+            size: 19px;
+            y: (parent.height - self.height) / 2;
+        }
+
+        Text {
+            text: root.label;
+            color: active ? Theme.text : Theme.text-dim;
+            font-size: 14px;
+            font-weight: active ? 600 : 400;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// A flat KPI card (label + icon header, large value).
+component StatCard inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> icon;
+    in property <color> accent: Theme.accent;
+
+    height: 100px;
+    border-radius: 13px;
+    background: Theme.card;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        HorizontalLayout {
+            Text {
+                text: root.label;
+                color: Theme.text-dim;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            Icon {
+                name: root.icon;
+                tint: root.accent;
+                size: 18px;
+            }
+        }
+
+        Text {
+            text: root.value;
+            color: Theme.text;
+            font-size: 26px;
+            font-weight: 600;
+        }
+    }
+}
+
+// A header cell for the table-like list views.
+component ColHead inherits Text {
+    color: Theme.text-mute;
+    font-size: 11px;
+    font-weight: 600;
+    vertical-alignment: center;
+}
+
+// A hexagon "shield" emblem for the hero banner.
+component HexShield inherits Rectangle {
+    in property <color> tint: #0c8f6b;
+    in property <bool> safe: true;
+    width: 132px;
+    height: 132px;
+
+    Rectangle {
+        width: 120px;
+        height: 120px;
+        border-radius: 60px;
+        background: #ffffff1f;
+    }
+
+    Path {
+        width: 92px;
+        height: 100px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        viewbox-width: 92;
+        viewbox-height: 100;
+        commands: "M 46 3 L 88 27 L 88 73 L 46 97 L 4 73 L 4 27 Z";
+        fill: #ffffff;
+    }
+
+    Icon {
+        name: root.safe ? "check" : "exclaim";
+        tint: root.tint;
+        size: 56px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Main window
+// ---------------------------------------------------------------------------
+
+export component AppWindow inherits Window {
+    title: "LinAV";
+    preferred-width: 980px;
+    preferred-height: 660px;
+    min-width: 860px;
+    min-height: 560px;
+    background: Theme.bg;
+    default-font-size: 14px;
+
+    in property <bool> connected: false;
+    in property <string> conn-detail: "connecting…";
+    in property <bool> realtime-active: false;
+    in property <int> scanned-count: 0;
+    in property <int> threat-count: 0;
+    in property <string> toast: "";
+    in property <bool> scan-active: false;
+    in property <float> scan-progress: 0;
+    in property <string> scan-label;
+    in property <string> scan-current;
+    in property <bool> quarantine-enabled: false;
+    in property <[QuarantineRow]> quarantine-items;
+    in property <[ExclusionRow]> exclusions;
+    in property <[DetectionRow]> detections;
+    in property <int> detections-selected: 0;
+    in property <int> quarantine-selected: 0;
+    in property <int> exclusions-selected: 0;
+
+    in-out property <int> page: 0;
+    out property <int> active-threats: root.detections.length + root.quarantine-items.length;
+    property <bool> safe: root.active-threats == 0;
+
+    callback scan(string);
+    callback refresh-status();
+    callback refresh-quarantine();
+    callback restore(string);
+    callback delete-item(string);
+    callback pause();
+    callback resume();
+    callback page-selected(int);
+    callback quit();
+    callback exclude-add(string);
+    callback exclude-remove(string);
+    callback refresh-exclusions();
+    callback scan-cancel();
+    callback detect-quarantine(string);
+    callback detect-delete(string);
+    callback detect-exclude(string);
+    callback clear-detections();
+
+    callback detect-toggle(int, bool);
+    callback detect-select-all(bool);
+    callback detect-quarantine-selected();
+    callback detect-exclude-selected();
+    callback detect-delete-selected();
+    callback quar-toggle(int, bool);
+    callback quar-select-all(bool);
+    callback quar-restore-selected();
+    callback quar-delete-selected();
+    callback excl-toggle(int, bool);
+    callback excl-select-all(bool);
+    callback excl-remove-selected();
+
+    HorizontalLayout {
+        spacing: 0px;
+
+        // Sidebar
+        Rectangle {
+            width: 220px;
+            background: Theme.sidebar;
+            Rectangle {
+                x: parent.width - 1px;
+                width: 1px;
+                background: #1c1d21;
+            }
+
+            VerticalLayout {
+                padding: 22px;
+                spacing: 6px;
+
+                // Brand
+                VerticalLayout {
+                    spacing: 1px;
+                    alignment: center;
+                    Text {
+                        text: "LinAV";
+                        color: Theme.text;
+                        font-size: 22px;
+                        font-weight: 800;
+                    }
+
+                    Text {
+                        text: "Linux Antivirus";
+                        color: Theme.text-dim;
+                        font-size: 12px;
+                    }
+                }
+
+                Rectangle {
+                    height: 22px;
+                }
+
+                NavButton {
+                    label: "Monitoring";
+                    icon: "dashboard";
+                    active: root.page == 0;
+                    clicked => {
+                        root.page = 0;
+                        root.page-selected(0);
+                    }
+                }
+
+                NavButton {
+                    label: "Scan results";
+                    icon: "alert";
+                    active: root.page == 4;
+                    clicked => {
+                        root.page = 4;
+                        root.page-selected(4);
+                    }
+                }
+
+                NavButton {
+                    label: "Quarantine";
+                    icon: "lock";
+                    active: root.page == 1;
+                    clicked => {
+                        root.page = 1;
+                        root.page-selected(1);
+                    }
+                }
+
+                NavButton {
+                    label: "Exclusions";
+                    icon: "ban";
+                    active: root.page == 3;
+                    clicked => {
+                        root.page = 3;
+                        root.page-selected(3);
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                // Footer: connection state
+                Rectangle {
+                    height: 1px;
+                    background: #1c1d21;
+                }
+
+                Rectangle {
+                    height: 8px;
+                }
+
+                Text {
+                    text: "Daemon status";
+                    color: Theme.text-mute;
+                    font-size: 11px;
+                }
+
+                HorizontalLayout {
+                    spacing: 9px;
+                    Rectangle {
+                        width: 9px;
+                        height: 9px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 5px;
+                        background: root.connected ? Theme.accent : Theme.danger;
+                    }
+
+                    Text {
+                        text: root.connected ? "Connected" : "Offline";
+                        color: Theme.text;
+                        font-size: 13px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    text: root.conn-detail;
+                    color: Theme.text-mute;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                Rectangle {
+                    height: 10px;
+                }
+
+                // Quit
+                Rectangle {
+                    height: 38px;
+                    border-radius: 9px;
+                    background: quitta.has-hover ? #2a151a : transparent;
+                    border-width: 1px;
+                    border-color: quitta.has-hover ? Theme.danger : #2a2b30;
+                    animate background, border-color { duration: 110ms; }
+                    quitta := TouchArea {
+                        clicked => {
+                            root.quit();
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 9px;
+                        Icon {
+                            name: "power";
+                            tint: quitta.has-hover ? Theme.danger : Theme.text-dim;
+                            size: 15px;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        Text {
+                            text: "Quit";
+                            color: quitta.has-hover ? Theme.danger : Theme.text-dim;
+                            font-size: 13px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Text {
+                    text: "Closing minimises to tray";
+                    color: Theme.text-mute;
+                    font-size: 10px;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        // Content
+        Rectangle {
+            background: transparent;
+            horizontal-stretch: 1;
+
+            VerticalLayout {
+                padding: 26px;
+                spacing: 18px;
+
+                // Monitoring
+                if root.page == 0: VerticalLayout {
+                    spacing: 18px;
+                    vertical-stretch: 1;
+
+                    // Hero status banner
+                    Rectangle {
+                        height: 186px;
+                        border-radius: 16px;
+                        clip: true;
+                        background: root.safe ? @linear-gradient(115deg, #0b7d5f 0%, #16a877 42%, #34dca2 100%) : @linear-gradient(115deg, #95192c 0%, #cc2c44 45%, #ff5f70 100%);
+
+                        HorizontalLayout {
+                            padding: 26px;
+                            spacing: 8px;
+
+                            HexShield {
+                                y: (parent.height - self.height) / 2;
+                                tint: root.safe ? #0b7d5f : #b21f33;
+                                safe: root.safe;
+                            }
+
+                            Rectangle {
+                                width: 14px;
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 14px;
+
+                                Text {
+                                    text: root.safe ? "No active threats found" : "\{root.active-threats} active threat" + (root.active-threats == 1 ? "" : "s") + " found";
+                                    color: #ffffff;
+                                    font-size: 28px;
+                                    font-weight: 800;
+                                    wrap: word-wrap;
+                                }
+
+                                VerticalLayout {
+                                    spacing: 7px;
+                                    HorizontalLayout {
+                                        spacing: 9px;
+                                        Rectangle {
+                                            width: 7px;
+                                            height: 7px;
+                                            y: 6px;
+                                            border-radius: 4px;
+                                            background: #ffffff;
+                                        }
+
+                                        Text {
+                                            text: "Real-time protection: " + (root.realtime-active ? "on" : "off");
+                                            color: #ffffffe6;
+                                            font-size: 14px;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 9px;
+                                        Rectangle {
+                                            width: 7px;
+                                            height: 7px;
+                                            y: 6px;
+                                            border-radius: 4px;
+                                            background: #ffffff;
+                                        }
+
+                                        Text {
+                                            text: root.safe ? "Files scanned: \{root.scanned-count}" : "Open Scan results to review and act on threats";
+                                            color: #ffffffe6;
+                                            font-size: 14px;
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+                    }
+
+                    // KPI cards
+                    HorizontalLayout {
+                        spacing: 14px;
+                        StatCard {
+                            horizontal-stretch: 1;
+                            label: "Files scanned";
+                            value: "\{root.scanned-count}";
+                            icon: "file";
+                            accent: Theme.accent;
+                        }
+
+                        StatCard {
+                            horizontal-stretch: 1;
+                            label: "Active threats";
+                            value: "\{root.active-threats}";
+                            icon: "alert";
+                            accent: root.active-threats == 0 ? Theme.accent : Theme.danger;
+                        }
+
+                        StatCard {
+                            horizontal-stretch: 1;
+                            label: "Real-time";
+                            value: root.realtime-active ? "On" : "Off";
+                            icon: "activity";
+                            accent: root.realtime-active ? Theme.accent : Theme.text-mute;
+                        }
+                    }
+
+                    // Quick scan
+                    Rectangle {
+                        vertical-stretch: 1;
+                        min-height: 118px;
+                        border-radius: 14px;
+                        background: Theme.card;
+                        border-width: 1px;
+                        border-color: Theme.border;
+
+                        VerticalLayout {
+                            padding: 18px;
+                            spacing: 14px;
+
+                            Text {
+                                text: "Quick scan";
+                                color: Theme.text;
+                                font-size: 15px;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                scan-input := NeoInput {
+                                    horizontal-stretch: 1;
+                                    placeholder: "/path/to/file/or/directory";
+                                    accepted(t) => {
+                                        root.scan(t);
+                                    }
+                                }
+
+                                AppButton {
+                                    width: 104px;
+                                    label: "Scan";
+                                    primary: true;
+                                    clicked => {
+                                        root.scan(scan-input.text);
+                                    }
+                                }
+
+                                AppButton {
+                                    width: 104px;
+                                    label: root.realtime-active ? "Pause" : "Resume";
+                                    accent: Theme.text-dim;
+                                    clicked => {
+                                        if (root.realtime-active) {
+                                            root.pause();
+                                        } else {
+                                            root.resume();
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Live progress while a directory scan runs.
+                            if root.scan-active: VerticalLayout {
+                                spacing: 7px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text {
+                                        text: root.scan-label;
+                                        color: Theme.text;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                    }
+
+                                    AppButton {
+                                        width: 92px;
+                                        label: "Cancel";
+                                        accent: Theme.danger;
+                                        font-size: 12px;
+                                        clicked => {
+                                            root.scan-cancel();
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    height: 6px;
+                                    border-radius: 3px;
+                                    background: #23252b;
+                                    Rectangle {
+                                        x: 0;
+                                        y: 0;
+                                        height: 100%;
+                                        width: parent.width * root.scan-progress;
+                                        border-radius: 3px;
+                                        background: Theme.accent;
+                                        animate width { duration: 120ms; }
+                                    }
+                                }
+
+                                Text {
+                                    text: root.scan-current;
+                                    color: Theme.text-mute;
+                                    font-size: 11px;
+                                    overflow: elide;
+                                }
+                            }
+
+                            if !root.scan-active && root.toast != "": Text {
+                                text: root.toast;
+                                color: Theme.text-mute;
+                                font-size: 12px;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                }
+
+                // Scan results
+                if root.page == 4: VerticalLayout {
+                    spacing: 16px;
+                    vertical-stretch: 1;
+
+                    selbar := HorizontalLayout {
+                        property <bool> bulk-confirm: false;
+                        spacing: 10px;
+                        Text {
+                            text: "Scan results";
+                            color: Theme.text;
+                            font-size: 21px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        // Bulk actions on the ticked rows.
+                        if root.detections-selected > 0 && !selbar.bulk-confirm: HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "\{root.detections-selected} selected";
+                                color: Theme.text-dim;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+
+                            AppButton {
+                                width: 104px;
+                                label: "Quarantine";
+                                accent: #ffb060;
+                                font-size: 12px;
+                                clicked => {
+                                    root.detect-quarantine-selected();
+                                }
+                            }
+
+                            AppButton {
+                                width: 90px;
+                                label: "Exclude";
+                                accent: Theme.accent;
+                                font-size: 12px;
+                                clicked => {
+                                    root.detect-exclude-selected();
+                                }
+                            }
+
+                            AppButton {
+                                width: 84px;
+                                label: "Delete";
+                                accent: Theme.danger;
+                                font-size: 12px;
+                                clicked => {
+                                    selbar.bulk-confirm = true;
+                                }
+                            }
+                        }
+
+                        if root.detections-selected > 0 && selbar.bulk-confirm: HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Delete \{root.detections-selected} file" + (root.detections-selected == 1 ? "" : "s") + " permanently?";
+                                color: Theme.danger;
+                                font-size: 12px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+
+                            AppButton {
+                                width: 90px;
+                                label: "Confirm";
+                                primary: true;
+                                accent: Theme.danger;
+                                font-size: 12px;
+                                clicked => {
+                                    selbar.bulk-confirm = false;
+                                    root.detect-delete-selected();
+                                }
+                            }
+
+                            AppButton {
+                                width: 84px;
+                                label: "Cancel";
+                                accent: Theme.text-dim;
+                                font-size: 12px;
+                                clicked => {
+                                    selbar.bulk-confirm = false;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: 8px;
+                        }
+
+                        Text {
+                            text: "\{root.detections.length} threat" + (root.detections.length == 1 ? "" : "s");
+                            color: root.detections.length == 0 ? Theme.text-dim : Theme.danger;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            width: 14px;
+                        }
+
+                        AppButton {
+                            width: 108px;
+                            label: "Clear";
+                            accent: Theme.text-dim;
+                            clicked => {
+                                root.clear-detections();
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        border-radius: 14px;
+                        background: Theme.card;
+                        border-width: 1px;
+                        border-color: Theme.border;
+
+                        VerticalLayout {
+                            padding: 6px;
+
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                padding-top: 12px;
+                                padding-bottom: 9px;
+                                spacing: 12px;
+                                Rectangle {
+                                    width: 22px;
+                                    SelectBox {
+                                        x: 0;
+                                        y: (parent.height - self.height) / 2;
+                                        checked: root.detections-selected == root.detections.length && root.detections.length > 0;
+                                        toggled(on) => {
+                                            root.detect-select-all(on);
+                                        }
+                                    }
+                                }
+
+                                ColHead {
+                                    text: "DETECTED FILE";
+                                    horizontal-stretch: 1;
+                                }
+
+                                ColHead {
+                                    text: "THREAT";
+                                    width: 150px;
+                                }
+
+                                ColHead {
+                                    text: "ACTIONS";
+                                    width: 300px;
+                                }
+                            }
+
+                            Rectangle {
+                                height: 1px;
+                                background: Theme.border;
+                            }
+
+                            if root.detections.length == 0: Rectangle {
+                                vertical-stretch: 1;
+                                min-height: 120px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 8px;
+                                    Text {
+                                        text: "No threats awaiting action.";
+                                        color: Theme.text;
+                                        font-size: 14px;
+                                        font-weight: 600;
+                                        horizontal-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: "Run a scan from Monitoring; anything flagged appears here to quarantine, delete or exclude.";
+                                        color: Theme.text-mute;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                    }
+                                }
+                            }
+
+                            ListView {
+                                vertical-stretch: 1;
+                                for det[idx] in root.detections: Rectangle {
+                                    property <bool> confirming: false;
+                                    height: 56px;
+                                    background: dhover.has-hover ? Theme.card-hover : transparent;
+                                    dhover := TouchArea { }
+
+                                    HorizontalLayout {
+                                        padding-left: 16px;
+                                        padding-right: 16px;
+                                        spacing: 12px;
+                                        Rectangle {
+                                            width: 22px;
+                                            SelectBox {
+                                                x: 0;
+                                                y: (parent.height - self.height) / 2;
+                                                checked: det.selected;
+                                                toggled(on) => {
+                                                    root.detect-toggle(idx, on);
+                                                }
+                                            }
+                                        }
+
+                                        Text {
+                                            text: det.path;
+                                            color: Theme.text;
+                                            font-size: 13px;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Text {
+                                            text: det.threat == "" ? "—" : det.threat;
+                                            color: Theme.danger;
+                                            font-size: 12px;
+                                            width: 150px;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+
+                                        if !confirming: VerticalLayout {
+                                            width: 300px;
+                                            alignment: center;
+                                            HorizontalLayout {
+                                                spacing: 8px;
+                                                AppButton {
+                                                    horizontal-stretch: 1;
+                                                    label: "Quarantine";
+                                                    accent: #ffb060;
+                                                    font-size: 12px;
+                                                    clicked => {
+                                                        root.detect-quarantine(det.path);
+                                                    }
+                                                }
+
+                                                AppButton {
+                                                    horizontal-stretch: 1;
+                                                    label: "Exclude";
+                                                    accent: Theme.accent;
+                                                    font-size: 12px;
+                                                    clicked => {
+                                                        root.detect-exclude(det.path);
+                                                    }
+                                                }
+
+                                                AppButton {
+                                                    horizontal-stretch: 1;
+                                                    label: "Delete";
+                                                    accent: Theme.danger;
+                                                    font-size: 12px;
+                                                    clicked => {
+                                                        confirming = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if confirming: VerticalLayout {
+                                            width: 300px;
+                                            alignment: center;
+                                            HorizontalLayout {
+                                                spacing: 8px;
+                                                Text {
+                                                    text: "Delete file permanently?";
+                                                    color: Theme.danger;
+                                                    font-size: 12px;
+                                                    font-weight: 600;
+                                                    horizontal-stretch: 1;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                AppButton {
+                                                    width: 80px;
+                                                    label: "Confirm";
+                                                    primary: true;
+                                                    accent: Theme.danger;
+                                                    font-size: 12px;
+                                                    clicked => {
+                                                        confirming = false;
+                                                        root.detect-delete(det.path);
+                                                    }
+                                                }
+
+                                                AppButton {
+                                                    width: 72px;
+                                                    label: "Cancel";
+                                                    accent: Theme.text-dim;
+                                                    font-size: 12px;
+                                                    clicked => {
+                                                        confirming = false;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        y: parent.height - 1px;
+                                        height: 1px;
+                                        background: #1f2025;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Quarantine
+                if root.page == 1: VerticalLayout {
+                    spacing: 16px;
+                    vertical-stretch: 1;
+
+                    qbar := HorizontalLayout {
+                        property <bool> bulk-confirm: false;
+                        spacing: 10px;
+                        Text {
+                            text: "Quarantine";
+                            color: Theme.text;
+                            font-size: 21px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        if root.quarantine-selected > 0 && !qbar.bulk-confirm: HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "\{root.quarantine-selected} selected";
+                                color: Theme.text-dim;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+
+                            AppButton {
+                                width: 96px;
+                                label: "Restore";
+                                accent: Theme.accent;
+                                font-size: 12px;
+                                clicked => {
+                                    root.quar-restore-selected();
+                                }
+                            }
+
+                            AppButton {
+                                width: 84px;
+                                label: "Delete";
+                                accent: Theme.danger;
+                                font-size: 12px;
+                                clicked => {
+                                    qbar.bulk-confirm = true;
+                                }
+                            }
+                        }
+
+                        if root.quarantine-selected > 0 && qbar.bulk-confirm: HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Delete \{root.quarantine-selected} entr" + (root.quarantine-selected == 1 ? "y" : "ies") + " permanently?";
+                                color: Theme.danger;
+                                font-size: 12px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+
+                            AppButton {
+                                width: 90px;
+                                label: "Confirm";
+                                primary: true;
+                                accent: Theme.danger;
+                                font-size: 12px;
+                                clicked => {
+                                    qbar.bulk-confirm = false;
+                                    root.quar-delete-selected();
+                                }
+                            }
+
+                            AppButton {
+                                width: 84px;
+                                label: "Cancel";
+                                accent: Theme.text-dim;
+                                font-size: 12px;
+                                clicked => {
+                                    qbar.bulk-confirm = false;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: 8px;
+                        }
+
+                        Text {
+                            text: "\{root.quarantine-items.length} held";
+                            color: Theme.text-dim;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            width: 14px;
+                        }
+
+                        AppButton {
+                            width: 108px;
+                            label: "Refresh";
+                            clicked => {
+                                root.refresh-quarantine();
+                            }
+                        }
+                    }
+
+                    if !root.quarantine-enabled: Rectangle {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 12px;
+                            HorizontalLayout {
+                                alignment: center;
+                                Icon {
+                                    name: "lock";
+                                    tint: #3a3d44;
+                                    size: 50px;
+                                }
+                            }
+
+                            Text {
+                                text: "Quarantine store is not active";
+                                color: Theme.text;
+                                font-size: 15px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: "Start the daemon with  --quarantine <dir>  to isolate threats.";
+                                color: Theme.text-mute;
+                                font-size: 12px;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+
+                    if root.quarantine-enabled: Rectangle {
+                        vertical-stretch: 1;
+                        border-radius: 14px;
+                        background: Theme.card;
+                        border-width: 1px;
+                        border-color: Theme.border;
+
+                        VerticalLayout {
+                            padding: 6px;
+
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                padding-top: 12px;
+                                padding-bottom: 9px;
+                                spacing: 12px;
+                                Rectangle {
+                                    width: 22px;
+                                    SelectBox {
+                                        x: 0;
+                                        y: (parent.height - self.height) / 2;
+                                        checked: root.quarantine-selected == root.quarantine-items.length && root.quarantine-items.length > 0;
+                                        toggled(on) => {
+                                            root.quar-select-all(on);
+                                        }
+                                    }
+                                }
+
+                                ColHead {
+                                    text: "ORIGINAL PATH";
+                                    horizontal-stretch: 1;
+                                }
+
+                                ColHead {
+                                    text: "THREAT";
+                                    width: 150px;
+                                }
+
+                                ColHead {
+                                    text: "QUARANTINED";
+                                    width: 130px;
+                                }
+
+                                ColHead {
+                                    text: "ACTIONS";
+                                    width: 184px;
+                                }
+                            }
+
+                            Rectangle {
+                                height: 1px;
+                                background: Theme.border;
+                            }
+
+                            if root.quarantine-items.length == 0: Rectangle {
+                                vertical-stretch: 1;
+                                min-height: 120px;
+                                Text {
+                                    text: "Quarantine is empty — nothing isolated.";
+                                    color: Theme.text-mute;
+                                    font-size: 13px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            ListView {
+                                vertical-stretch: 1;
+                                for qrow[idx] in root.quarantine-items: Rectangle {
+                                    height: 54px;
+                                    background: qhover.has-hover ? Theme.card-hover : transparent;
+                                    qhover := TouchArea { }
+
+                                    HorizontalLayout {
+                                        padding-left: 16px;
+                                        padding-right: 16px;
+                                        spacing: 12px;
+                                        Rectangle {
+                                            width: 22px;
+                                            SelectBox {
+                                                x: 0;
+                                                y: (parent.height - self.height) / 2;
+                                                checked: qrow.selected;
+                                                toggled(on) => {
+                                                    root.quar-toggle(idx, on);
+                                                }
+                                            }
+                                        }
+
+                                        Text {
+                                            text: qrow.path;
+                                            color: Theme.text;
+                                            font-size: 13px;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Text {
+                                            text: qrow.threat == "" ? "—" : qrow.threat;
+                                            color: Theme.danger;
+                                            font-size: 12px;
+                                            width: 150px;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Text {
+                                            text: qrow.date;
+                                            color: Theme.text-dim;
+                                            font-size: 12px;
+                                            width: 130px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        VerticalLayout {
+                                            width: 184px;
+                                            alignment: center;
+                                            HorizontalLayout {
+                                                spacing: 8px;
+                                                AppButton {
+                                                    horizontal-stretch: 1;
+                                                    label: "Restore";
+                                                    accent: Theme.accent;
+                                                    font-size: 12px;
+                                                    clicked => {
+                                                        root.restore(qrow.id);
+                                                    }
+                                                }
+
+                                                AppButton {
+                                                    horizontal-stretch: 1;
+                                                    label: "Delete";
+                                                    accent: Theme.danger;
+                                                    font-size: 12px;
+                                                    clicked => {
+                                                        root.delete-item(qrow.id);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        y: parent.height - 1px;
+                                        height: 1px;
+                                        background: #1f2025;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Exclusions
+                if root.page == 3: VerticalLayout {
+                    spacing: 16px;
+                    vertical-stretch: 1;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text {
+                            text: "Exclusions";
+                            color: Theme.text;
+                            font-size: 21px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        if root.exclusions-selected > 0: HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "\{root.exclusions-selected} selected";
+                                color: Theme.text-dim;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+
+                            AppButton {
+                                width: 132px;
+                                label: "Remove selected";
+                                accent: Theme.danger;
+                                font-size: 12px;
+                                clicked => {
+                                    root.excl-remove-selected();
+                                }
+                            }
+
+                            Rectangle {
+                                width: 8px;
+                            }
+                        }
+
+                        Text {
+                            text: "\{root.exclusions.length} excluded";
+                            color: Theme.text-dim;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            width: 14px;
+                        }
+
+                        AppButton {
+                            width: 108px;
+                            label: "Refresh";
+                            clicked => {
+                                root.refresh-exclusions();
+                            }
+                        }
+                    }
+
+                    // Add a new exclusion
+                    Rectangle {
+                        height: 96px;
+                        border-radius: 14px;
+                        background: Theme.card;
+                        border-width: 1px;
+                        border-color: Theme.border;
+
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 12px;
+                            Text {
+                                text: "Add a file or folder to ignore";
+                                color: Theme.text;
+                                font-size: 14px;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                excl-input := NeoInput {
+                                    horizontal-stretch: 1;
+                                    placeholder: "/path/to/file/or/directory";
+                                    accepted(t) => {
+                                        root.exclude-add(t);
+                                        self.text = "";
+                                    }
+                                }
+
+                                AppButton {
+                                    width: 120px;
+                                    label: "Add";
+                                    primary: true;
+                                    clicked => {
+                                        root.exclude-add(excl-input.text);
+                                        excl-input.text = "";
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Current exclusions
+                    Rectangle {
+                        vertical-stretch: 1;
+                        border-radius: 14px;
+                        background: Theme.card;
+                        border-width: 1px;
+                        border-color: Theme.border;
+
+                        VerticalLayout {
+                            padding: 6px;
+
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                padding-top: 12px;
+                                padding-bottom: 9px;
+                                spacing: 12px;
+                                Rectangle {
+                                    width: 22px;
+                                    SelectBox {
+                                        x: 0;
+                                        y: (parent.height - self.height) / 2;
+                                        checked: root.exclusions-selected == root.exclusions.length && root.exclusions.length > 0;
+                                        toggled(on) => {
+                                            root.excl-select-all(on);
+                                        }
+                                    }
+                                }
+
+                                ColHead {
+                                    text: "TYPE";
+                                    width: 70px;
+                                }
+
+                                ColHead {
+                                    text: "EXCLUDED PATH";
+                                    horizontal-stretch: 1;
+                                }
+
+                                ColHead {
+                                    text: "ACTIONS";
+                                    width: 110px;
+                                }
+                            }
+
+                            Rectangle {
+                                height: 1px;
+                                background: Theme.border;
+                            }
+
+                            if root.exclusions.length == 0: Rectangle {
+                                vertical-stretch: 1;
+                                min-height: 120px;
+                                Text {
+                                    text: "Nothing excluded. Add a path above, or restore a file from quarantine.";
+                                    color: Theme.text-mute;
+                                    font-size: 13px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            ListView {
+                                vertical-stretch: 1;
+                                for ex[idx] in root.exclusions: Rectangle {
+                                    height: 48px;
+                                    background: exhover.has-hover ? Theme.card-hover : transparent;
+                                    exhover := TouchArea { }
+
+                                    HorizontalLayout {
+                                        padding-left: 16px;
+                                        padding-right: 16px;
+                                        spacing: 12px;
+                                        Rectangle {
+                                            width: 22px;
+                                            SelectBox {
+                                                x: 0;
+                                                y: (parent.height - self.height) / 2;
+                                                checked: ex.selected;
+                                                toggled(on) => {
+                                                    root.excl-toggle(idx, on);
+                                                }
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            width: 70px;
+                                            Icon {
+                                                name: ex.is-dir ? "folder" : "file";
+                                                tint: ex.is-dir ? Theme.accent : Theme.text-dim;
+                                                size: 17px;
+                                                x: 0;
+                                                y: (parent.height - self.height) / 2;
+                                            }
+                                        }
+
+                                        Text {
+                                            text: ex.path;
+                                            color: Theme.text;
+                                            font-size: 13px;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+
+                                        VerticalLayout {
+                                            width: 110px;
+                                            alignment: center;
+                                            AppButton {
+                                                label: "Remove";
+                                                accent: Theme.danger;
+                                                font-size: 11px;
+                                                clicked => {
+                                                    root.exclude-remove(ex.path);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        y: parent.height - 1px;
+                                        height: 1px;
+                                        background: #1f2025;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

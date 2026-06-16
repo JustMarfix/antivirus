@@ -1,0 +1,19 @@
+[Unit]
+Description=Linux Antivirus monitoring daemon
+Documentation=https://example.org/avdaemon
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/avdaemon --socket /run/avdaemon.sock --db /etc/avdaemon/signatures.db --watch /srv/avdaemon/inbox --socket-group avscan
+Restart=on-failure
+RestartSec=2
+
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+RuntimeDirectory=avdaemon
+ProtectHome=read-only
+NoNewPrivileges=no
+
+[Install]
+WantedBy=multi-user.target
