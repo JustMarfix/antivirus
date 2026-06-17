@@ -6,10 +6,10 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <cstdarg>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
-// The BPF object code is embedded into the binary at build time (see
-// daemon/CMakeLists.txt and cmake/EmbedFile.cmake).
 extern "C" {
 extern const unsigned char av_syscall_monitor_bpf[];
 extern const unsigned int av_syscall_monitor_bpf_len;
@@ -19,31 +19,57 @@ namespace av::daemon {
 
 namespace {
 
-int silence_libbpf(enum libbpf_print_level, const char*, va_list) {
+std::string& libbpf_log() {
+    static std::string log;
+    return log;
+}
+
+int capture_libbpf(enum libbpf_print_level level, const char* format, va_list args) {
+    if (level > LIBBPF_WARN) {
+        return 0;
+    }
+    char buffer[1024];
+    int written = std::vsnprintf(buffer, sizeof(buffer), format, args);
+    if (written > 0) {
+        libbpf_log().append(buffer);
+    }
     return 0;
+}
+
+std::string with_libbpf_log(const char* prefix) {
+    std::string message = prefix;
+    if (!libbpf_log().empty()) {
+        message += ": ";
+        message += libbpf_log();
+    }
+    return message;
 }
 
 }
 
 EbpfMonitor::EbpfMonitor(Handler handler) : handler_(std::move(handler)) {
-    libbpf_set_print(silence_libbpf);
+    libbpf_set_print(capture_libbpf);
+    libbpf_log().clear();
 
     object_ = bpf_object__open_mem(av_syscall_monitor_bpf, av_syscall_monitor_bpf_len, nullptr);
     if (object_ == nullptr) {
-        throw IoError("eBPF: failed to open embedded program");
+        throw IoError(with_libbpf_log("eBPF: failed to open embedded program"));
     }
 
     if (bpf_object__load(object_) != 0) {
+        std::string message =
+            with_libbpf_log("eBPF: failed to load program (needs CAP_BPF/CAP_SYS_ADMIN and BTF)");
         bpf_object__close(object_);
         object_ = nullptr;
-        throw IoError("eBPF: failed to load program (needs CAP_BPF/CAP_SYS_ADMIN and BTF)");
+        throw IoError(message);
     }
 
     bpf_program* program = nullptr;
     bpf_object__for_each_program(program, object_) {
         bpf_link* link = bpf_program__attach(program);
         if (link == nullptr) {
-            throw IoError(std::string("eBPF: failed to attach program: ") + std::strerror(errno));
+            throw IoError(with_libbpf_log(
+                (std::string("eBPF: failed to attach program: ") + std::strerror(errno)).c_str()));
         }
         links_.push_back(link);
     }
